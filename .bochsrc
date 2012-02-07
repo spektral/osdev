@@ -1,0 +1,2 @@
+floppya: image="a.img", status=inserted
+boot: floppy
