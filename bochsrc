@@ -7,3 +7,5 @@ boot: a
 mouse: enabled=0
 clock: sync=realtime
 cpu: ips=1000000
+
+magic_break: enabled=1

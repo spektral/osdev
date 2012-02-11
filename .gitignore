@@ -1,8 +1,18 @@
+# Text files
+*.lst
+*.log
+
+# Binary files
 *.swp
 *.bin
 *.img
 *.o
-*.lst
-*.log
-*.bmp
 *.dat
+*.pyc
+
+# Image files
+*.bmp
+*.png
+
+# Trash folder
+old/

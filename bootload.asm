@@ -8,6 +8,7 @@
 start:
     mov     ax, 0x07c0    ; Set data segment to where we are after boot (07c0)
     mov     ds, ax
+	call 	read_error
 
     mov     ax, 0x09c0    ; Set stack segment to 09c0
     mov     ss, ax
@@ -15,56 +16,68 @@ start:
 
     call    init_video
 
-    ; Read sectors to video memory + palette
-    mov     ax, 0xa000      ; Video memory segment
-    mov     es, ax          ;   -> ES
-    mov     bx, 0           ; Destination offset
+    ; Read RLI data from disk
+    mov     ax, 0x07e0      ; Set ES to Data Segment
+    mov     es, ax
+    mov     bx, 0			; Set destination to [ES:rli_data]
     mov     ax, 1           ; Sector offset
-    mov     cx, 256         ; Sector count (320*200 + 768) rounded to sector
+    mov     cx, 254      	; Sector count
     call    read_sectors
 
-    ; Set palette
-    mov     ax, 0xa000
-    mov     es, ax
-    mov     si, 0xfa00      ; [ES:SI] = Just after video mem
-    mov     cx, 256         ; Color count
-    call    set_palette
-    ; End read and set palette
+    call    display_rli
 
-    mov     ax, 0xa000
-    mov     es, ax
-    mov     si, 0xfa00
-    mov     cx, 512
-    ;call    dump_mem
-
-    hlt
-    jmp     $
+	hlt
 
 ; Procedures ------------------------------------------------------------------
 
+;-------------------
+; Display RLI image
+; Input:    rli_data - RLI data. Duh.
+display_rli:
+	mov		ax, 0x07e0
+	mov		ds, ax
+    mov     si, 4
+    mov     cx, 256
+    call    set_palette
+
+    mov     si, 772        				; Set source index to start of image
+    mov     ax, 0xa000                  ; Set destination index to video mem
+    mov     es, ax
+    xor     di, di
+	mov		ch, 0
+.L1:
+    mov     cl, byte [ds:si]            ; Get first value in RLE pair (count)
+    mov     al, byte [ds:si+1]          ; Get second value in RLE pair (value)
+    cmp     cl, 0						; Check for end of data
+    je      .return
+    add     si, 2                       ; Adjust index
+    rep     stosb
+    jmp     .L1
+.return:
+    ret
+
 ;-----------------
 ; Set VGA palette
-; Input:    es:si - pointer to palette
-;           cx    - color count
-; Output:   none
+; Input:    DS:SI - pointer to palette
+;           CX    - color count
 set_palette:
     push    ax              ; Save registers
     push    bx
 
     mov     ax, 0           ; Start at color number 0
-.l1:
-    mov     ah, byte [es:si]; Get red component
+.L1:
+    mov     ah, byte [ds:si]; Get red component
     inc     si              ; Step
-    mov     bl, byte [es:si]; Get green component
+    mov     bl, byte [ds:si]; Get green component
     inc     si              ; Step
-    mov     bh, byte [es:si]; Get blue component
+    mov     bh, byte [ds:si]; Get blue component
     inc     si              ; Step
 
     ; Set color in palette
     call    set_color
 
     inc     al              ; Step to next color
-    loop    .l1             ; Loop
+    loop    .L1             ; Loop
 
     pop     bx              ; Restore registers
     pop     ax
@@ -126,10 +139,25 @@ put_byte:
 ;----------------------
 ; Write char to screen
 ; Input:    AL - ASCII value to print
+; Taints:	AX, BX
 put_char:
     mov     ah, 0x0e
+	mov		bh, 0x00
+	mov		bl, 0x07
     int     0x10
     ret
+
+;------------------------
+; Write a line to screen
+; Input:	CX - String length
+; 			DX - Position
+;			ES:BP - String pointer
+put_string:
+	mov		bh, 0x00
+	mov		bl, 0x07
+	mov		ah, 0x13
+	int		0x10
+	ret
 
 ;--------------------------------------
 ; Transform a byte to ascii hex values
@@ -165,9 +193,14 @@ init_video:
 
 ;-------------------
 ; Output read error
-; Not implemented
 read_error:
-     hlt
+	mov 	ax, 0x07c0
+	mov 	es, ax
+	movzx	cx, byte [read_error_str_len]
+	xor 	dx, dx
+	mov		bp, read_error_str
+	call 	put_string
+	ret
 
 ;----------------------------------
 ; Read sectors from disk to memory
@@ -196,6 +229,7 @@ read_sectors:
     pop     ax
     jnz     .sectorloop
     call    read_error
+	jmp		$
 .success:
     pop     cx                      ; Restore the registers
     pop     bx
@@ -237,6 +271,7 @@ lba2chs:
     ret
 
 ; Data, padding and boot signature --------------------------------------------
+
     chs_cylinder        db 0
     chs_head            db 0
     chs_sector          db 0
@@ -248,6 +283,8 @@ lba2chs:
     head_count          db 2
 
     hexdata             db "0123456789abcdef"
+	read_error_str		db "Read Error"
+	read_error_str_len	dd $ - read_error_str
 
     times 510-($-$$)    nop
                         dw 0xaa55
