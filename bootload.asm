@@ -8,13 +8,12 @@
 start:
     mov     ax, 0x07c0    ; Set data segment to where we are after boot (07c0)
     mov     ds, ax
-	call 	read_error
 
     mov     ax, 0x09c0    ; Set stack segment to 09c0
     mov     ss, ax
     xor     sp, sp
 
-    call    init_video
+    call    video.initialize
 
     ; Read RLI data from disk
     mov     ax, 0x07e0      ; Set ES to Data Segment
@@ -22,9 +21,9 @@ start:
     mov     bx, 0			; Set destination to [ES:rli_data]
     mov     ax, 1           ; Sector offset
     mov     cx, 254      	; Sector count
-    call    read_sectors
+    call    floppy.read
 
-    call    display_rli
+    call    video.render_rli
 
 	hlt
 
@@ -33,12 +32,13 @@ start:
 ;-------------------
 ; Display RLI image
 ; Input:    rli_data - RLI data. Duh.
-display_rli:
+video.render_rli:
+	pusha
 	mov		ax, 0x07e0
 	mov		ds, ax
     mov     si, 4
     mov     cx, 256
-    call    set_palette
+    call    video.set_palette
 
     mov     si, 772        				; Set source index to start of image
     mov     ax, 0xa000                  ; Set destination index to video mem
@@ -54,15 +54,15 @@ display_rli:
     rep     stosb
     jmp     .L1
 .return:
+	popa
     ret
 
 ;-----------------
 ; Set VGA palette
 ; Input:    DS:SI - pointer to palette
 ;           CX    - color count
-set_palette:
-    push    ax              ; Save registers
-    push    bx
+video.set_palette:
+    pusha					; Save registers
 
     mov     ax, 0           ; Start at color number 0
 .L1:
@@ -74,13 +74,12 @@ set_palette:
     inc     si              ; Step
 
     ; Set color in palette
-    call    set_color
+    call    video.set_color
 
     inc     al              ; Step to next color
     loop    .L1             ; Loop
 
-    pop     bx              ; Restore registers
-    pop     ax
+    popa                  	; Restore registers
     ret
 
 ;-------------------------------
@@ -90,10 +89,8 @@ set_palette:
 ;           bl - Green component
 ;           bh - Blue component
 ; Output:   Palette data is updated
-set_color:
-    push    ax
-    push    bx
-    push    dx
+video.set_color:
+	pusha
 
     mov     dx, 0x03c8      ; Choose color
     out     dx, al          ;   number AL
@@ -108,9 +105,7 @@ set_color:
     mov     al, bh
     out     dx, al          ; Set blue
 
-    pop     dx
-    pop     bx
-    pop     ax
+	popa
     ret
 
 ;-------------
@@ -122,29 +117,37 @@ dump_mem:
 .L1:
     mov     al, byte [es:si] ; AL = [ES:SI]
     inc     si
-    call    put_byte    ; Print AL as hex to screen
+    call    video.out.hex 	; Print AL as hex to screen
     loop    .L1         ; CX--; JNZ .L1
     ret 
 
 ;----------------------
 ; Print byte to screen
 ; Input:    AL - Byte to print
-put_byte:
-    call    byte_to_hex ; AL:BL = High:low nybble as ASCII hex
-    call    put_char    ; Print ASCII in AL to screen
+video.out.hex:
+	pusha
+
+    call    convert.to_hex ; AL:BL = High:low nybble as ASCII hex
+    call    video.out.ascii	; Print ASCII in AL to screen
     mov     al, bl      ; Move low nybble to al
-    call    put_char    ; Print ASCII in AL to screen
+    call    video.out.ascii	; Print ASCII in AL to screen
+
+	popa
     ret
 
 ;----------------------
 ; Write char to screen
 ; Input:    AL - ASCII value to print
 ; Taints:	AX, BX
-put_char:
+video.out.ascii:
+	pusha
+
     mov     ah, 0x0e
 	mov		bh, 0x00
 	mov		bl, 0x07
     int     0x10
+
+	popa
     ret
 
 ;------------------------
@@ -152,7 +155,7 @@ put_char:
 ; Input:	CX - String length
 ; 			DX - Position
 ;			ES:BP - String pointer
-put_string:
+video.out.string:
 	mov		bh, 0x00
 	mov		bl, 0x07
 	mov		ah, 0x13
@@ -164,7 +167,7 @@ put_string:
 ; Input:    AL - Byte to transform
 ; Output:   AX - High nybble as ASCII hex
 ;           BL - Low nybble as ASCII hex
-byte_to_hex:
+convert.to_hex:
     push    si              ; Save SI
 
     xor     ah, ah
@@ -185,21 +188,29 @@ byte_to_hex:
 
 ;------------------
 ; Initialize video
-init_video:
+video.initialize:
+	pusha
+
     xor     ax, ax          ; ah = 0x00, Set Video Mode Function
     mov     al, 0x13        ; VGA 320x200 256 color
     int     0x10
+
+	popa
     ret
 
 ;-------------------
 ; Output read error
-read_error:
+error.read:
+	pusha
+
 	mov 	ax, 0x07c0
 	mov 	es, ax
 	movzx	cx, byte [read_error_str_len]
 	xor 	dx, dx
 	mov		bp, read_error_str
-	call 	put_string
+	call 	video.out.string
+
+	popa
 	ret
 
 ;----------------------------------
@@ -207,14 +218,15 @@ read_error:
 ; Input:    ax - Start sector
 ;           cx - Sector count
 ; Output:   [es:bx] - Read data
-read_sectors:
+floppy.read:
+	pusha
 .main:
     mov     di, 5
 .sectorloop:
     push    ax
     push    bx
     push    cx
-    call    lba2chs                 ; Fetch the CHS from LBA
+    call    convert.lba2chs         ; Fetch the CHS from LBA
     mov     ah, 02                  ; Read function
     mov     al, 01                  ; Read one sector
     mov     ch, byte [chs_cylinder] ; Get track from chs
@@ -228,7 +240,7 @@ read_sectors:
     pop     bx
     pop     ax
     jnz     .sectorloop
-    call    read_error
+    call    error.read
 	jmp		$
 .success:
     pop     cx                      ; Restore the registers
@@ -240,6 +252,7 @@ read_sectors:
     jz      .endread
     loop    .main
 .endread:
+	popa
     ret
 
 ;--------------------
@@ -248,9 +261,8 @@ read_sectors:
 ; Output:   chs_cylinder - cylinder
 ;           chs_head - head
 ;           chs_sector - sector
-lba2chs:
-    push    bx                      ; Save registers
-    push    dx
+convert.lba2chs:
+	pusha
 
     xor     dx, dx                  ; Zero dx
     movzx   bx, byte [sectors_per_track] ; Fetch SPT constant
@@ -266,8 +278,7 @@ lba2chs:
     mov     [chs_cylinder], al      ; Save cylinder
     mov     [chs_head], dl          ; Save head
 
-    pop     dx
-    pop     bx                      ; Restore registers
+	popa
     ret
 
 ; Data, padding and boot signature --------------------------------------------
